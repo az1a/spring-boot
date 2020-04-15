@@ -27,6 +27,14 @@ resources:
     username: ((github-username))
     password: ((github-password))
     branch: ((branch))
+- name: git-repo-ci-docker
+  type: git
+  icon: github-circle
+  source:
+    uri: ((github-repo))
+    username: ((github-username))
+    password: ((github-password))
+    branch: ci-docker-((branch))
 - name: git-repo-windows
   type: git
   source:
@@ -175,6 +183,7 @@ jobs:
         GITHUB_PASSWORD: ((github-password))
         GITHUB_USERNAME: ((github-username))
         JDK_VERSION: java8
+        MILESTONE: ((milestone))
       image: spring-boot-ci-image
     - task: detect-jdk11-update
       file: git-repo/ci/tasks/detect-jdk-updates.yml
@@ -184,6 +193,7 @@ jobs:
         GITHUB_PASSWORD: ((github-password))
         GITHUB_USERNAME: ((github-username))
         JDK_VERSION: java11
+        MILESTONE: ((milestone))
       image: spring-boot-ci-image
     - task: detect-jdk14-update
       file: git-repo/ci/tasks/detect-jdk-updates.yml
@@ -193,6 +203,7 @@ jobs:
         GITHUB_PASSWORD: ((github-password))
         GITHUB_USERNAME: ((github-username))
         JDK_VERSION: java14
+        MILESTONE: ((milestone))
       image: spring-boot-ci-image
 - name: detect-ubuntu-image-updates
   plan:
@@ -204,6 +215,36 @@ jobs:
     - task: detect-ubuntu-image-updates
       file: git-repo/ci/tasks/detect-ubuntu-image-updates.yml
       params:
+        GITHUB_REPO: spring-boot
+        GITHUB_ORGANIZATION: spring-projects
+        GITHUB_PASSWORD: ((github-password))
+        GITHUB_USERNAME: ((github-username))
+        MILESTONE: ((milestone))
+      image: spring-boot-ci-image
+- name: detect-docker-updates
+  plan:
+  - get: git-repo
+  - get: git-repo-ci-docker
+  - get: every-wednesday
+    trigger: true
+  - get: spring-boot-ci-image
+  - do:
+    - task: detect-docker-updates
+      file: git-repo/ci/tasks/detect-docker-updates.yml
+      params:
+        GITHUB_REPO: spring-boot
+        GITHUB_ORGANIZATION: spring-projects
+        MILESTONE: ((milestone))
+      image: spring-boot-ci-image
+    - put: git-repo-ci-docker
+      params:
+        repository: git-repo-updated
+        force: true
+    - task: create-pull-request
+      file: git-repo/ci/tasks/create-pull-request.yml
+      params:
+        BASE_BRANCH: ((branch))
+        BRANCH: ci-docker-((branch))
         GITHUB_REPO: spring-boot
         GITHUB_ORGANIZATION: spring-projects
         GITHUB_PASSWORD: ((github-password))
@@ -235,7 +276,11 @@ jobs:
         params: { state: "failure", commit: "git-repo" }
       - put: slack-alert
         params:
-          text: ":concourse-failed: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!>"
+          text: >
+            :concourse-failed: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!
+            [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+            [<$TEXT_FILE_CONTENT|build scan>]
+          text_file: git-repo/build/build-scan-uri.txt
           silent: true
           icon_emoji: ":concourse:"
           username: concourse-ci
@@ -261,13 +306,19 @@ jobs:
       do:
       - put: slack-alert
         params:
-          text: ":concourse-failed: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!>"
+          text: >
+            :concourse-failed: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!
+            [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
           silent: true
           icon_emoji: ":concourse:"
           username: concourse-ci
   - put: slack-alert
     params:
-      text: ":concourse-succeeded: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!>"
+      text: >
+        :concourse-succeeded: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!
+        [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+        [<$TEXT_FILE_CONTENT|build scan>]
+      text_file: git-repo/build/build-scan-uri.txt
       silent: true
       icon_emoji: ":concourse:"
       username: concourse-ci
@@ -325,7 +376,11 @@ jobs:
         params: { state: "failure", commit: "git-repo" }
       - put: slack-alert
         params:
-          text: ":concourse-failed: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!>"
+          text: >
+            :concourse-failed: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!
+            [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+            [<$TEXT_FILE_CONTENT|build scan>]
+          text_file: git-repo/build/build-scan-uri.txt
           silent: true
           icon_emoji: ":concourse:"
           username: concourse-ci
@@ -333,7 +388,11 @@ jobs:
     params: { state: "success", commit: "git-repo" }
   - put: slack-alert
     params:
-      text: ":concourse-succeeded: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!>"
+      text: >
+        :concourse-succeeded: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!
+        [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+        [<$TEXT_FILE_CONTENT|build scan>]
+      text_file: git-repo/build/build-scan-uri.txt
       silent: true
       icon_emoji: ":concourse:"
       username: concourse-ci
@@ -363,7 +422,11 @@ jobs:
             params: { state: "failure", commit: "git-repo" }
           - put: slack-alert
             params:
-              text: ":concourse-failed: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!>"
+              text: >
+                :concourse-failed: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!
+                [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+                [<$TEXT_FILE_CONTENT|build scan>]
+              text_file: git-repo/build/build-scan-uri.txt
               silent: true
               icon_emoji: ":concourse:"
               username: concourse-ci
@@ -371,7 +434,11 @@ jobs:
       params: { state: "success", commit: "git-repo" }
     - put: slack-alert
       params:
-        text: ":concourse-succeeded: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!>"
+        text: >
+          :concourse-succeeded: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!
+          [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+          [<$TEXT_FILE_CONTENT|build scan>]
+        text_file: git-repo/build/build-scan-uri.txt
         silent: true
         icon_emoji: ":concourse:"
         username: concourse-ci
@@ -398,13 +465,21 @@ jobs:
         do:
           - put: slack-alert
             params:
-              text: ":concourse-failed: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!>"
+              text: >
+                :concourse-failed: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} failed!
+                [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+                [<$TEXT_FILE_CONTENT|build scan>]
+              text_file: git-repo/build/build-scan-uri.txt
               silent: true
               icon_emoji: ":concourse:"
               username: concourse-ci
     - put: slack-alert
       params:
-        text: ":concourse-succeeded: <https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!>"
+        text: >
+          :concourse-succeeded: ${BUILD_PIPELINE_NAME} ${BUILD_JOB_NAME} was successful!
+          [<https://ci.spring.io/teams/${BUILD_TEAM_NAME}/pipelines/${BUILD_PIPELINE_NAME}/jobs/${BUILD_JOB_NAME}/builds/${BUILD_NAME}|build log>]
+          [<$TEXT_FILE_CONTENT|build scan>]
+        text_file: git-repo/build/build-scan-uri.txt
         silent: true
         icon_emoji: ":concourse:"
         username: concourse-ci
@@ -595,6 +670,6 @@ groups:
 - name: "Release"
   jobs: ["stage-milestone", "stage-rc", "stage-release", "promote-milestone", "promote-rc", "promote-release", "sync-to-maven-central"]
 - name: "CI Images"
-  jobs: ["build-spring-boot-ci-images", "detect-jdk-updates", "detect-ubuntu-image-updates"]
+  jobs: ["build-spring-boot-ci-images", "detect-docker-updates", "detect-jdk-updates", "detect-ubuntu-image-updates"]
 - name: "Build Pull Requests"
   jobs: ["build-pull-requests"]

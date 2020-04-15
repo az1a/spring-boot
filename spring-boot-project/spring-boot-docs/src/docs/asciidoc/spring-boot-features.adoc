@@ -193,31 +193,34 @@ See the {spring-boot-module-api}/builder/SpringApplicationBuilder.html[`SpringAp
 
 
 
-[[boot-features-application-availability-state]]
-=== Application Availability State
-When deployed on plaftorms, applications can provide information about their availability to the platform using infrastructure like https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/[Kubernetes Probes].
-Spring Boot manages this application state with the `ApplicationAvailabilityProvider` and makes it available to application components and the platform itself.
+[[boot-features-application-availability]]
+=== Application Availability
+When deployed on platforms, applications can provide information about their availability to the platform using infrastructure such as https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/[Kubernetes Probes].
+Spring Boot includes out-of-the box support for the commonly used "`liveness`" and "`readiness`" availability states.
+If you are using Spring Boot's "`actuator`" support then these states are exposed as health endpoint groups.
+
+In addition, you can also obtain availability states by injecting the `ApplicationAvailability` interface into your own beans.
 
 
 
-[[boot-features-application-availability-liveness]]
+[[boot-features-application-availability-liveness-state]]
 ==== Liveness State
-The "Liveness" state of an application tells whether its internal state allows it to work correctly, or recover by itself if it's currently failing.
-An invalid "Liveness" state means that the application is in a broken state and cannot recover from it; the infrastructure should then restart the application to mitigate that problem.
+The "`Liveness`" state of an application tells whether its internal state allows it to work correctly, or recover by itself if it's currently failing.
+A broken "`Liveness`" state means that the application is in a state that it cannot recover from, and the infrastructure should restart the application.
 
 NOTE: In general, the "Liveness" state should not be based on external checks, such as <<production-ready-features.adoc#production-ready-health, Health checks>>.
 If it did, a failing external system (a database, a Web API, an external cache) would trigger massive restarts and cascading failures across the platform.
 
-The internal state of Spring Boot applications is mostly represented by the Spring application context.
+The internal state of Spring Boot applications is mostly represented by the Spring `ApplicationContext`.
 If the application context has started successfully, Spring Boot assumes that the application is in a valid state.
 An application is considered live as soon as the context has been refreshed, see <<boot-features-application-events-and-listeners, Spring Boot application lifecycle and related Application Events>>.
 
 
 
-[[boot-features-application-availability-readiness]]
+[[boot-features-application-availability-readiness-state]]
 ==== Readiness State
-The "Readiness" state of an application tells whether the application is ready to handle traffic.
-A failing "Readiness" state tells the platform that it should not route traffic to the application for now.
+The "`Readiness`" state of an application tells whether the application is ready to handle traffic.
+A failing "`Readiness`" state tells the platform that it should not route traffic to the application for now.
 This typically happens during startup, while `CommandLineRunner` and `ApplicationRunner` components are being processed, or at any time if the application decides that it's too busy for additional traffic.
 
 An application is considered ready as soon as application and command-line runners have been called, see <<boot-features-application-events-and-listeners, Spring Boot application lifecycle and related Application Events>>.
@@ -226,9 +229,9 @@ TIP: Tasks expected to run during startup should be executed by `CommandLineRunn
 
 
 
-[[boot-features-managing-application-availability]]
+[[boot-features-application-availability-managing]]
 ==== Managing the Application Availability State
-Application components can retrieve the current availability state at any time, by injecting the `ApplicationAvailabilityProvider` and calling methods on it.
+Application components can retrieve the current availability state at any time, by injecting the `ApplicationAvailability` interface and calling methods on it.
 More often, applications will want to listen to state updates or update the state of the application.
 
 For example, we can export the "Readiness" state of the application to a file so that a Kubernetes "exec Probe" can look at this file:
@@ -236,15 +239,15 @@ For example, we can export the "Readiness" state of the application to a file so
 [source,java,indent=0]
 ----
     @Component
-	public class ReadinessStateExporter implements ApplicationListener<LivenessStateChangedEvent> {
+	public class ReadinessStateExporter {
 
-		@Override
-	    public void onApplicationEvent(LivenessStateChangedEvent event) {
-			switch (event.getReadinessState().getStatus()) {
-		    case READY:
+		@EventListener
+	    public void onStateChange(AvailabilityChangeEvent<ReadinessState> event) {
+			switch (event.getState()) {
+		    case ACCEPTING_TRAFFIC:
 			    // create file /tmp/healthy
 			break;
-		    case UNREADY:
+		    case REFUSING_TRAFFIC:
 		    	// remove file /tmp/healthy
 			break;
 		    }
@@ -271,7 +274,7 @@ We can also update the state of the application, when the application breaks and
 	    		//...
 	    	}
 	    	catch (CacheCompletelyBrokenException ex) {
-                this.eventPublisher.publishEvent(LivenessStateChangedEvent.broken(ex));
+	    		AvailabilityChangeEvent.publish(this.eventPublisher, ex, LivenessState.BROKEN);
 	    	}
 	    }
 
@@ -280,6 +283,7 @@ We can also update the state of the application, when the application breaks and
 
 Spring Boot provides <<production-ready-features.adoc#production-ready-kubernetes-probes,Kubernetes HTTP probes for "Liveness" and "Readiness" with Actuator Health Endpoints>>.
 You can get more guidance about <<deployment.adoc#cloud-deployment-kubernetes,deploying Spring Boot applications on Kubernetes in the dedicated section>>.
+
 
 
 [[boot-features-application-events-and-listeners]]
@@ -307,9 +311,9 @@ Application events are sent in the following order, as your application runs:
 . An `ApplicationContextInitializedEvent` is sent when the `ApplicationContext` is prepared and ApplicationContextInitializers have been called but before any bean definitions are loaded.
 . An `ApplicationPreparedEvent` is sent just before the refresh is started but after bean definitions have been loaded.
 . An `ApplicationStartedEvent` is sent after the context has been refreshed but before any application and command-line runners have been called.
-. An `LivenessStateChangedEvent` is sent right after to indicate that the application is considered as live.
+. An `AvailabilityChangeEvent` is sent right after with `LivenessState.CORRECT` to indicate that the application is considered as live.
 . An `ApplicationReadyEvent` is sent after any application and command-line runners have been called.
-. An `ReadinessStateChangedEvent` is sent right after to indicate that the application is ready to service requests.
+. An `LivenessState` is sent right after with `ReadinessState.ACCEPTING_TRAFFIC` to indicate that the application is ready to service requests.
 . An `ApplicationFailedEvent` is sent if there is an exception on startup.
 
 The above list only includes ``SpringApplicationEvent``s that are tied to a `SpringApplication`.
@@ -1024,7 +1028,7 @@ TIP: If you have more than one constructor for your class you can also use `@Con
 
 
 [[boot-features-external-config-enabling]]
-==== Enabling `@ConfigurationProperties`-annotated types
+==== Enabling @ConfigurationProperties-annotated types
 Spring Boot provides infrastructure to bind `@ConfigurationProperties` types and register them as beans.
 You can either enable configuration properties on a class-by-class basis or enable configuration property scanning that works in a similar manner to component scanning.
 
@@ -1068,7 +1072,7 @@ If you still want to inject other beans using the constructor, the configuration
 
 
 [[boot-features-external-config-using]]
-==== Using `@ConfigurationProperties`-annotated types
+==== Using @ConfigurationProperties-annotated types
 This style of configuration works particularly well with the `SpringApplication` external YAML configuration, as shown in the following example:
 
 [source,yaml,indent=0]
@@ -1379,7 +1383,7 @@ These are:
 
 The default unit is milliseconds and can be overridden using `@DurationUnit` as illustrated in the sample above.
 
-TIP: If you are upgrading from a previous version that is simply using `Long` to express the duration, make sure to define the unit (using `@DurationUnit`) if it isn't milliseconds alongside the switch to `Duration`.
+TIP: If you are upgrading a `Long` property, make sure to define the unit (using `@DurationUnit`) if it isn't milliseconds.
 Doing so gives a transparent upgrade path while supporting a much richer format.
 
 
@@ -1413,7 +1417,7 @@ These are:
 
 The default unit is bytes and can be overridden using `@DataSizeUnit` as illustrated in the sample above.
 
-TIP: If you are upgrading from a previous version that is simply using `Long` to express the size, make sure to define the unit (using `@DataSizeUnit`) if it isn't bytes alongsidethe switch to `DataSize`.
+TIP: If you are upgrading a `Long` property, make sure to define the unit (using `@DataSizeUnit`) if it isn't bytes.
 Doing so gives a transparent upgrade path while supporting a much richer format.
 
 
@@ -1546,7 +1550,7 @@ You could also specify it on the command line by using the following switch: `--
 The configprop:spring.profiles.active[] property follows the same ordering rules as other properties: The highest `PropertySource` wins.
 This means that you can specify active profiles in `application.properties` and then *replace* them by using the command line switch.
 
-Sometimes, it is useful to have profil-specific properties that *add* to the active profiles rather than replace them.
+Sometimes, it is useful to have profile-specific properties that *add* to the active profiles rather than replace them.
 The configprop:spring.profiles.include[] property can be used to unconditionally add active profiles.
 The `SpringApplication` entry point also has a Java API for setting additional profiles (that is, on top of those activated by the configprop:spring.profiles.active[] property).
 See the `setAdditionalProfiles()` method in {spring-boot-module-api}/SpringApplication.html[SpringApplication].
@@ -2304,7 +2308,7 @@ Nowadays, Content Negotiation is much more reliable.
 There are other ways to deal with HTTP clients that don't consistently send proper "Accept" request headers.
 Instead of using suffix matching, we can use a query parameter to ensure that requests like `"GET /projects/spring-boot?format=json"` will be mapped to `@GetMapping("/projects/spring-boot")`:
 
-[source,properties,indent=0,subs="verbatim,quotes,attributes",configprops]
+[source,properties,indent=0,subs="verbatim,quotes,attributes"]
 ----
 	spring.mvc.contentnegotiation.favor-parameter=true
 
@@ -2315,9 +2319,10 @@ Instead of using suffix matching, we can use a query parameter to ensure that re
 	spring.mvc.contentnegotiation.media-types.markdown=text/markdown
 ----
 
+Suffix pattern matching is deprecated and will be removed in a future release.
 If you understand the caveats and would still like your application to use suffix pattern matching, the following configuration is required:
 
-[source,properties,indent=0,subs="verbatim,quotes,attributes",configprops]
+[source,properties,indent=0,subs="verbatim,quotes,attributes"]
 ----
 	spring.mvc.contentnegotiation.favor-path-extension=true
 	spring.mvc.pathmatch.use-suffix-pattern=true
@@ -2325,7 +2330,7 @@ If you understand the caveats and would still like your application to use suffi
 
 Alternatively, rather than open all suffix patterns, it's more secure to just support registered suffix patterns:
 
-[source,properties,indent=0,subs="verbatim,quotes,attributes",configprops]
+[source,properties,indent=0,subs="verbatim,quotes,attributes"]
 ----
 	spring.mvc.contentnegotiation.favor-path-extension=true
 	spring.mvc.pathmatch.use-registered-suffix-pattern=true
@@ -3132,8 +3137,9 @@ Spring Boot will auto-configure the Spring Messaging infrastructure for RSocket.
 This means that Spring Boot will create a `RSocketMessageHandler` bean that will handle RSocket requests to your application.
 
 
+
 [[boot-features-rsocket-requester]]
-=== Calling RSocket Services with `RSocketRequester`
+=== Calling RSocket Services with RSocketRequester
 Once the `RSocket` channel is established between server and client, any party can send or receive requests to the other.
 
 As a server, you can get injected with an `RSocketRequester` instance on any handler method of an RSocket `@Controller`.
@@ -3905,6 +3911,8 @@ TIP: You do not need to specify a driver class name, since Spring Boot obtains t
 NOTE: At least the url should be provided.
 Information specified in the URL takes precedence over individual properties, i.e. `name`, `username`, `password` and pooling options.
 
+TIP: The "`How-to`" section includes a <<howto.adoc#howto-initialize-a-database-using-r2dbc, section on how to initialize a database>>.
+
 To customize the connections created by a `ConnectionFactory`, i.e., set specific parameters that you do not want (or cannot) configure in your central database configuration, you can use a `ConnectionFactoryOptionsBuilderCustomizer` `@Bean`.
 The following example shows how to manually override the database port while the rest of the options is taken from the application configuration:
 
@@ -3930,8 +3938,6 @@ The following examples shows how to set some PostgreSQL connection options:
 ----
 
 When a `ConnectionFactory` bean is available, the regular jdbc `DataSource` auto-configuration backs off.
-If you need to initialize or migrate the database on startup, consider using the dedicated Flyway or Liquibase support.
-Alternatively, consider registering a `ResourceDatabasePopulator` bean with the scripts to invoke on startup.
 
 
 
@@ -4516,6 +4522,18 @@ Generally, you provide `keyspace-name` and `contact-points` as well the local da
 	spring.data.cassandra.contact-points=cassandrahost1:9042,cassandrahost2:9042
 	spring.data.cassandra.local-datacenter=datacenter1
 ----
+
+If the port is the same for all your contact points you can use a shortcut and only specify the host names, as shown in the following example:
+
+[source,properties,indent=0,configprops]
+----
+	spring.data.cassandra.keyspace-name=mykeyspace
+	spring.data.cassandra.contact-points=cassandrahost1,cassandrahost2
+	spring.data.cassandra.local-datacenter=datacenter1
+----
+
+TIP: Those two examples are identical as the port default to `9042`.
+If you need to configure the port, use `spring.data.cassandra.port`.
 
 You can also register an arbitrary number of beans that implement `DriverConfigLoaderBuilderCustomizer` for more advanced driver customizations.
 The `CqlSession` can be customized with a bean of type `CqlSessionBuilderCustomizer`.
@@ -5317,6 +5335,9 @@ Alternatively, you could configure the same connection using the `addresses` att
 	spring.rabbitmq.addresses=amqp://admin:secret@localhost
 ----
 
+NOTE: When specifying addresses that way, the `host` and `port` properties are ignored.
+If the address uses the `amqps` protocol, SSL support is enabled automatically.
+
 If a `ConnectionNameStrategy` bean exists in the context, it will be automatically used to name connections created by the auto-configured `ConnectionFactory`.
 See {spring-boot-autoconfigure-module-code}/amqp/RabbitProperties.java[`RabbitProperties`] for more of the supported options.
 
@@ -5629,7 +5650,7 @@ spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}
 
 
 [[boot-features-resttemplate]]
-== Calling REST Services with `RestTemplate`
+== Calling REST Services with RestTemplate
 If you need to call remote REST services from your application, you can use the Spring Framework's {spring-framework-api}/web/client/RestTemplate.html[`RestTemplate`] class.
 Since `RestTemplate` instances often need to be customized before being used, Spring Boot does not provide any single auto-configured `RestTemplate` bean.
 It does, however, auto-configure a `RestTemplateBuilder`, which can be used to create `RestTemplate` instances when needed.
@@ -5683,7 +5704,7 @@ Doing so switches off the auto-configuration of a `RestTemplateBuilder` and prev
 
 
 [[boot-features-webclient]]
-== Calling REST Services with `WebClient`
+== Calling REST Services with WebClient
 If you have Spring WebFlux on your classpath, you can also choose to use `WebClient` to call remote REST services.
 Compared to `RestTemplate`, this client has a more functional feel and is fully reactive.
 You can learn more about the `WebClient` in the dedicated {spring-framework-docs}web-reactive.html#webflux-client[section in the Spring Framework docs].
@@ -7398,7 +7419,7 @@ To do so, configure their location, as shown in the following example:
 
 
 [[boot-features-webservices-template]]
-=== Calling Web Services with `WebServiceTemplate`
+=== Calling Web Services with WebServiceTemplate
 If you need to call remote Web services from your application, you can use the {spring-webservices-docs}#client-web-service-template[`WebServiceTemplate`] class.
 Since `WebServiceTemplate` instances often need to be customized before being used, Spring Boot does not provide any single auto-configured `WebServiceTemplate` bean.
 It does, however, auto-configure a `WebServiceTemplateBuilder`, which can be used to create `WebServiceTemplate` instances when needed.
@@ -7589,6 +7610,9 @@ The `@ConditionalOnWebApplication` and `@ConditionalOnNotWebApplication` annotat
 A servlet-based web application is any application that uses a Spring `WebApplicationContext`, defines a `session` scope, or has a `ConfigurableWebEnvironment`.
 A reactive web application is any application that uses a `ReactiveWebApplicationContext`, or has a `ConfigurableReactiveWebEnvironment`.
 
+The `@ConditionalOnWarDeployment` annotation lets configuration be included depending on whether the application is a traditional WAR application that is deployed to a container.
+This condition will not match for applications that are run with an embedded server.
+
 
 
 [[boot-features-spel-conditions]]
@@ -7735,7 +7759,7 @@ Using your own starter in a compatible IDE is also a good idea to validate that 
 
 
 [[boot-features-custom-starter-module-autoconfigure]]
-==== `autoconfigure` Module
+==== The "`autoconfigure`" Module
 The `autoconfigure` module contains everything that is necessary to get started with the library.
 It may also contain configuration key definitions (such as `@ConfigurationProperties`) and any callback interface that can be used to further customize how the components are initialized.
 
@@ -7899,7 +7923,7 @@ TIP: `org.jetbrains.kotlinx:kotlinx-coroutines-reactor` dependency is provided b
 
 
 [[boot-features-kotlin-configuration-properties]]
-=== `@ConfigurationProperties`
+=== @ConfigurationProperties
 `@ConfigurationProperties` when used in combination with <<boot-features-external-config-constructor-binding,`@ConstructorBinding`>> supports classes with immutable `val` properties as shown in the following example:
 
 [source,kotlin,indent=0]
@@ -7980,78 +8004,42 @@ The other issue is that putting your application's code and all its dependencies
 Since you probably recompile your code more often than you upgrade the version of Spring Boot you use, it’s often better to separate things a bit more.
 If you put jar files in the layer before your application classes, Docker often only needs to change the very bottom layer and can pick others up from its cache.
 
-=== Layered Jars
-To make it easier to create optimized Docker images that can be built with a dockerfile, Spring Boot supports "layered jars".
-A regular fat jar that can be run with `java -jar` has the following structure:
-
-[source]
-----
-META-INF/
-  MANIFEST.MF
-org/
-  springframework/
-    boot/
-      loader/
-        ...
-BOOT-INF/
-  classes/
-    ...
-  lib/
-    ...
-----
-
-The jar is organized into three main parts:
-
-* Classes used to bootstrap jar loading
-* Your application classes in `BOOT-INF/classes`
-* Dependencies in `BOOT-INF/lib`
-
-Instead of the above jar, you can create a layered jar that looks something like this:
-
-[source]
-----
-META-INF/
-  MANIFEST.MF
-org/
-  springframework/
-    boot/
-      loader/
-        ...
-BOOT-INF/
-  layers/
-    <name>/
-      classes/
-        ...
-      lib/
-        ...
-    <name>/
-      classes/
-        ...
-      lib/
-        ...
-  layers.idx
-----
-
-You still see the bootstrap loader classes (you can still run `java -jar`) but now the `lib` and `classes` folders have been split up and categorized into layers.
-There’s also a `layers.idx` file that provides the order in which layers should be added.
+=== Layering Docker Images
+To make it easier to create optimized Docker images that can be built with a dockerfile, Spring Boot supports adding a layer index file to the jar.
+The `layers.idx` file lists all the files in the jar along with the layer that the file should go in.
+The list of files in the index is ordered based on the order in which the layers should be added.
 Out-of-the-box, the following layers are supported:
 
 * `dependencies` (for regular released dependencies)
+* `spring-boot-loader` (for everything under `org/springframework/boot/loader`)
 * `snapshot-dependencies` (for snapshot dependencies)
-* `resources` (for static resources)
 * `application` (for application classes and resources)
 
+The following shows an example of a `layers.idx` file:
+
+[source]
+----
+dependencies BOOT-INF/lib/library1.jar
+dependencies BOOT-INF/lib/library2.jar
+spring-boot-loader org/springframework/boot/loader/JarLauncher.class
+spring-boot-loader org/springframework/boot/loader/jar/JarEntry.class
+...
+snapshot-dependencies BOOT-INF/lib/library3-SNAPSHOT.jar
+application META-INF/MANIFEST.MF
+application BOOT-INF/classes/a/b/C.class
+----
 
 This layering is designed to separate code based on how likely it is to change between application builds.
 Library code is less likely to change between builds, so it is placed in its own layers to allow tooling to re-use the layers from cache.
 Application code is more likely to change between builds so it is isolated in a separate layer.
 
-For Maven, refer to the {spring-boot-maven-plugin-docs}/#repackage-layered-jars[packaging layered jars section] for more details on creating a layered jar.
+For Maven, refer to the {spring-boot-maven-plugin-docs}/#repackage-layered-jars[packaging layered jars section] for more details on adding a layer index to the jar.
 For Gradle, refer to the {spring-boot-gradle-plugin-docs}/#packaging-layered-jars[packaging layered jars section] of the Gradle plugin documentation.
 
-=== Writing the Dockerfile
 
-When you create a layered jar, the `spring-boot-jarmode-layertools` jar will be added as a dependency to your jar.
+
+=== Writing the Dockerfile
+When you create a jar containing the layers index file, the `spring-boot-jarmode-layertools` jar will be added as a dependency to your jar.
 With this jar on the classpath, you can launch your application in a special mode which allows the bootstrap code to run something entirely different from your application, for example, something that extracts the layers.
 Here’s how you can launch your jar with a `layertools` jar mode:
 
@@ -8091,6 +8079,13 @@ COPY --from=builder application/snapshot-dependencies/ ./
 COPY --from=builder application/resources/ ./
 COPY --from=builder application/application/ ./
 ENTRYPOINT ["java", "org.springframework.boot.loader.JarLauncher"]
+----
+
+Assuming the above `Dockerfile` is in the current directory, your docker image can be built with `docker build .`, or optionally specifying the path to your application jar, as shown in the following example:
+
+[indent=0]
+----
+	docker build --build-arg JAR_FILE=path/to/myapp.jar .
 ----
 
 This is a multi-stage dockerfile.
